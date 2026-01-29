@@ -33,10 +33,18 @@ FetchContent_MakeAvailable(clap-wrapper)
 ################# Other deps
 
 FetchContent_Declare(
-    cpp-semver
-    GIT_REPOSITORY https://github.com/z4kn4fein/cpp-semver.git
-    GIT_TAG v0.4.0)
-FetchContent_MakeAvailable(cpp-semver)
+	cpp-semver
+	GIT_REPOSITORY https://github.com/z4kn4fein/cpp-semver.git
+	GIT_TAG v0.4.0
+	GIT_SHALLOW ON
+)
+FetchContent_Declare(
+	cbor-walker
+	GIT_REPOSITORY https://github.com/geraintluff/cbor-walker.git
+	GIT_TAG 1.1.0
+	GIT_SHALLOW ON
+)
+FetchContent_MakeAvailable(cpp-semver cbor-walker)
 
 ################# Bridge plugin
 
@@ -50,6 +58,7 @@ target_link_libraries(${PLUGIN}_static PUBLIC
 	clap
 	wclap-bridge
 	semver
+	cbor-walker
 )
 target_sources(${PLUGIN}_static PUBLIC
 	${CMAKE_CURRENT_SOURCE_DIR}/source/wclap-bridge-plugin.cpp

@@ -3,6 +3,7 @@
 #include "clap/all.h"
 
 #include "semver/semver.hpp"
+#include "cbor-walker/cbor-walker.h"
 
 #include <iostream>
 #include <atomic>
@@ -70,22 +71,112 @@ void scanWclapDirectories() {
 std::mutex initMutex;
 std::atomic<int> initCounter = 0;
 
-struct Wclap {
-	void *handle;
-	const clap_plugin_factory *pluginFactory;
-	
-	Wclap(void *handle) : handle(handle) {
-		pluginFactory = (const clap_plugin_factory *)wclap_get_factory(handle, CLAP_PLUGIN_FACTORY_ID);
+static std::vector<std::string> wclapDirs;
+static std::vector<clap_plugin_invalidation_source> invalidations;
+void makeInvalidations() {
+	for (auto &str : wclapDirs) {
+		invalidations.push_back(clap_plugin_invalidation_source{
+			.directory=str.c_str(),
+			.filename_glob="*.wclap",
+			.recursive_scan=true
+		});
 	}
+}
+
+static std::vector<std::unique_ptr<std::string>> storedStrings;
+const char * storeString(const char *str) {
+	storedStrings.emplace_back(std::unique_ptr<std::string>{new std::string(str)});
+	return storedStrings.back()->c_str();
+}
+void replaceString(const char *&str, const char *fallback=nullptr) {
+	str = (str ? storeString(str) : fallback);
+}
+
+static std::vector<std::unique_ptr<std::vector<const char *>>> storedFeatures;
+void replaceFeatures(const char * const *&rawFeatures) {
+	storedFeatures.emplace_back(std::unique_ptr<std::vector<const char *>>{new std::vector<const char *>()});
+	auto &features = storedFeatures.back();
+	while (rawFeatures && *rawFeatures) {
+		features->push_back(storeString(*rawFeatures));
+		++rawFeatures;
+	}
+	features->push_back(nullptr);
+	rawFeatures = features->data();
+}
+
+//----
+
+struct Wclap {
+	Wclap(const std::string &wclapPath) : wclapPath(wclapPath) {}
 	Wclap(const Wclap &other) = delete;
-	Wclap(Wclap &&other) : handle(other.handle), pluginFactory(other.pluginFactory) {
+	Wclap(Wclap &&other) : wclapPath(other.wclapPath), handle(other.handle) {
 		other.handle = nullptr;
 	}
 	~Wclap() {
 		if (handle) wclap_close(handle);
 	}
+	
+	const clap_plugin_factory * getPluginFactory() {
+		std::lock_guard<std::mutex> lock{mutex};
+
+		if (!handle) {
+			handle = wclap_open(wclapPath.c_str());
+			if (handle) std::cout << "Opened WCLAP: " << wclapPath << std::endl;
+		}
+		
+		char errorMessage[256] = "";
+		if (handle && wclap_get_error(handle, errorMessage, 256)) {
+			std::cerr << "WCLAP bridge plugin (" << wclapPath << ") failed to open: " << errorMessage << std::endl;
+			wclap_close(handle);
+			handle = nullptr;
+		}
+		if (!handle) return nullptr;
+		return (const clap_plugin_factory *)wclap_get_factory(handle, CLAP_PLUGIN_FACTORY_ID);
+	}
+	
+	std::vector<clap_plugin_descriptor> plugins;
+	
+	void scanPlugins() {
+		plugins.clear();
+		
+		bool alreadyOpen = !!handle;
+		auto *pluginFactory = getPluginFactory();
+		if (pluginFactory) {
+			auto count = pluginFactory->get_plugin_count(pluginFactory);
+			for (size_t i = 0; i < count; ++i) {
+				auto *rawDesc = pluginFactory->get_plugin_descriptor(pluginFactory, i);
+				if (rawDesc) {
+					plugins.emplace_back();
+					auto &desc = plugins.back();
+					
+					desc = *rawDesc;
+					replaceString(desc.id);
+					replaceString(desc.name);
+					replaceString(desc.vendor);
+					replaceString(desc.url);
+					replaceString(desc.manual_url);
+					replaceString(desc.support_url);
+					replaceString(desc.version);
+					replaceString(desc.description);
+					
+					replaceFeatures(desc.features);
+				}
+			}
+		}
+
+		if (!alreadyOpen) {
+			// Forget the module
+			if (handle) wclap_close(handle);
+			pluginFactory = nullptr;
+			handle = nullptr;
+		}
+	}
+
+private:
+	std::mutex mutex;
+	std::string wclapPath;
+	void *handle = nullptr;
 };
-static std::vector<std::string> wclapDirs;
 static std::vector<Wclap> wclapList;
 bool endsWith(const std::string &str, const std::string &end) {
 	if (str.size() < end.size()) return false;
@@ -102,70 +193,15 @@ void scanWclapDirectory(const std::string &pathStr) {
 	for (auto &entry : std::filesystem::recursive_directory_iterator(pathStr)) {
 		auto wclapPath = entry.path().string();
 		if (endsWith(wclapPath, ".wclap") || endsWith(wclapPath, ".wclap.wasm")) {
-			auto *handle = wclap_open(wclapPath.c_str());
-			if (!handle) continue;
-			char errorMessage[256] = "";
-			if (wclap_get_error(handle, errorMessage, 256)) {
-				std::cerr << "WCLAP bridge plugin: couldn't open WCLAP at: " << wclapPath << "\n";
-				std::cerr << errorMessage << std::endl;
-				wclap_close(handle);
-				continue;
-			}
-			std::cout << "Opened WCLAP: " << wclapPath << std::endl;
-			wclapList.emplace_back(handle);
+			wclapList.emplace_back(wclapPath);
 		}
-	}
-}
-
-static std::vector<clap_plugin_invalidation_source> invalidations;
-void makeInvalidations() {
-	for (auto &str : wclapDirs) {
-		invalidations.push_back(clap_plugin_invalidation_source{
-			.directory=str.c_str(),
-			.filename_glob="*.wclap",
-			.recursive_scan=true
-		});
 	}
 }
 
 struct Plugin {
-	const clap_plugin_descriptor *desc;
-	size_t wclapIndex;
+	size_t wclapIndex, pluginIndex;
 };
-struct std::vector<Plugin> pluginList;
-
-void scanWclapPlugins() {
-	for (size_t wclapIndex = 0; wclapIndex < wclapList.size(); ++wclapIndex) {
-		auto &wclap = wclapList[wclapIndex];
-		if (!wclap.pluginFactory) continue;
-		
-		auto count = wclap.pluginFactory->get_plugin_count(wclap.pluginFactory);
-		for (size_t i = 0; i < count; ++i) {
-			auto *desc = wclap.pluginFactory->get_plugin_descriptor(wclap.pluginFactory, i);
-			if (desc) {
-				bool duplicate = false;
-				for (auto &existing : pluginList) {
-					if (!std::strcmp(desc->id, existing.desc->id)) {
-						duplicate = true;
-						bool newer = false;
-						if (!existing.desc->version) {
-							newer = true;
-						} else if (desc->version) {
-							auto ver = semver::version::parse(desc->version);
-							auto existingVer = semver::version::parse(existing.desc->version);
-							newer = ver > existingVer;
-						}
-						if (newer) existing = {desc, wclapIndex};
-						break;
-					}
-				}
-				if (duplicate) return;
-				
-				pluginList.push_back({desc, wclapIndex});
-			}
-		}
-	}
-}
+static struct std::vector<Plugin> pluginList;
 
 CLAP_EXPORT bool clap_init(const char *modulePath) {
 	std::lock_guard<std::mutex> lock{initMutex};
@@ -177,7 +213,37 @@ CLAP_EXPORT bool clap_init(const char *modulePath) {
 	
 	scanWclapDirectories();
 	// TODO: search CLAP_PATH environment variable
-	scanWclapPlugins();
+	
+	for (size_t wclapIndex = 0; wclapIndex < wclapList.size(); ++wclapIndex) {
+		auto &wclap = wclapList[wclapIndex];
+		wclap.scanPlugins(); // TODO: cache this
+
+		for (size_t pluginIndex = 0; pluginIndex < wclap.plugins.size(); ++pluginIndex) {
+			auto &desc = wclap.plugins[pluginIndex];
+
+			// Only add to the list if it's not a duplicate
+			bool duplicate = false;
+			for (auto &existing : pluginList) {
+				auto &existingDesc = wclapList[existing.wclapIndex].plugins[existing.pluginIndex];
+				if (!std::strcmp(desc.id, existingDesc.id)) {
+					duplicate = true;
+					// Check if this one is newer than the one we already found
+					bool newer = false;
+					if (!existingDesc.version) {
+						newer = true;
+					} else if (desc.version) {
+						auto ver = semver::version::parse(desc.version);
+						auto existingVer = semver::version::parse(existingDesc.version);
+						newer = ver > existingVer;
+					}
+					if (newer) existing = {wclapIndex, pluginIndex};
+					break;
+				}
+			}
+
+			if (!duplicate) pluginList.push_back({wclapIndex, pluginIndex});
+		}
+	}
 	
 	return true;
 }
@@ -186,9 +252,13 @@ CLAP_EXPORT void clap_deinit() {
 	std::lock_guard<std::mutex> lock{initMutex};
 	if (--initCounter) return;
 
-	wclapList.clear();
+	wclapDirs.clear();
 	invalidations.clear();
+	storedStrings.clear();
+	storedFeatures.clear();
+	wclapList.clear();
 	pluginList.clear();
+
 	wclap_global_deinit();
 }
 
@@ -197,13 +267,18 @@ static uint32_t pluginFactory_get_plugin_count(const struct clap_plugin_factory 
 }
 static const clap_plugin_descriptor_t * pluginFactory_get_plugin_descriptor(const struct clap_plugin_factory *factory, uint32_t index) {
 	if (index >= pluginList.size()) return nullptr;
-	return pluginList[index].desc;
+	auto &plugin = pluginList[index];
+	auto &desc = wclapList[plugin.wclapIndex].plugins[plugin.pluginIndex];
+	return &desc;
 }
 static const clap_plugin_t * pluginFactory_create_plugin(const struct clap_plugin_factory *factory, const clap_host *host, const char *pluginId) {
 	for (auto &plugin : pluginList) {
-		if (!std::strcmp(pluginId, plugin.desc->id)) {
-			auto &wclap = wclapList[plugin.wclapIndex];
-			return wclap.pluginFactory->create_plugin(wclap.pluginFactory, host, pluginId);
+		auto &wclap = wclapList[plugin.wclapIndex];
+		auto &desc = wclap.plugins[plugin.pluginIndex];
+		if (!std::strcmp(pluginId, desc.id)) {
+			auto *pluginFactory = wclap.getPluginFactory();
+			if (!pluginFactory) return nullptr;
+			return pluginFactory->create_plugin(pluginFactory, host, pluginId);
 		}
 	}
 	return nullptr;
