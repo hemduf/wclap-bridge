@@ -83,26 +83,41 @@ void makeInvalidations() {
 	}
 }
 
-static std::vector<std::unique_ptr<std::string>> storedStrings;
-const char * storeString(const char *str) {
-	storedStrings.emplace_back(std::unique_ptr<std::string>{new std::string(str)});
-	return storedStrings.back()->c_str();
-}
-void replaceString(const char *&str, const char *fallback=nullptr) {
-	str = (str ? storeString(str) : fallback);
-}
+struct PluginDescriptor {
+	clap_plugin_descriptor clapDesc;
+	std::vector<const char *> clapFeatures;
+	
+	std::string id, name, vendor, url, manual_url, support_url, version, description;
+	std::vector<std::string> features;
 
-static std::vector<std::unique_ptr<std::vector<const char *>>> storedFeatures;
-void replaceFeatures(const char * const *&rawFeatures) {
-	storedFeatures.emplace_back(std::unique_ptr<std::vector<const char *>>{new std::vector<const char *>()});
-	auto &features = storedFeatures.back();
-	while (rawFeatures && *rawFeatures) {
-		features->push_back(storeString(*rawFeatures));
-		++rawFeatures;
+	PluginDescriptor(const clap_plugin_descriptor *desc) {
+		clapDesc = *desc;
+
+		setString(id, clapDesc.id);
+		setString(name, clapDesc.name);
+		setString(vendor, clapDesc.vendor);
+		setString(url, clapDesc.url);
+		setString(manual_url, clapDesc.manual_url);
+		setString(support_url, clapDesc.support_url);
+		setString(version, clapDesc.version);
+		setString(description, clapDesc.description);
+		
+		const char * const *rawFeatures = clapDesc.features;
+		while (rawFeatures && *rawFeatures) {
+			features.push_back(*rawFeatures);
+			++rawFeatures;
+		}
+		for (auto &s : features) clapFeatures.push_back(s.c_str());
+		clapFeatures.push_back(nullptr);
+		clapDesc.features = clapFeatures.data();
 	}
-	features->push_back(nullptr);
-	rawFeatures = features->data();
-}
+	
+private:
+	void setString(std::string &field, const char *&clapField) {
+		if (clapField) field = clapField; // some of these fields can be NULL according to the standard, but it causes problems in some hosts/wrappers
+		clapField = field.c_str();
+	}
+};
 
 //----
 
@@ -134,7 +149,7 @@ struct Wclap {
 		return (const clap_plugin_factory *)wclap_get_factory(handle, CLAP_PLUGIN_FACTORY_ID);
 	}
 	
-	std::vector<clap_plugin_descriptor> plugins;
+	std::vector<PluginDescriptor> plugins;
 	
 	void scanPlugins() {
 		plugins.clear();
@@ -146,20 +161,7 @@ struct Wclap {
 			for (size_t i = 0; i < count; ++i) {
 				auto *rawDesc = pluginFactory->get_plugin_descriptor(pluginFactory, i);
 				if (rawDesc) {
-					plugins.emplace_back();
-					auto &desc = plugins.back();
-					
-					desc = *rawDesc;
-					replaceString(desc.id);
-					replaceString(desc.name);
-					replaceString(desc.vendor);
-					replaceString(desc.url);
-					replaceString(desc.manual_url);
-					replaceString(desc.support_url);
-					replaceString(desc.version);
-					replaceString(desc.description);
-					
-					replaceFeatures(desc.features);
+					plugins.emplace_back(rawDesc);
 				}
 			}
 		}
@@ -225,13 +227,13 @@ CLAP_EXPORT bool clap_init(const char *modulePath) {
 			bool duplicate = false;
 			for (auto &existing : pluginList) {
 				auto &existingDesc = wclapList[existing.wclapIndex].plugins[existing.pluginIndex];
-				if (!std::strcmp(desc.id, existingDesc.id)) {
+				if (desc.id == existingDesc.id) {
 					duplicate = true;
 					// Check if this one is newer than the one we already found
 					bool newer = false;
-					if (!existingDesc.version) {
+					if (existingDesc.version.empty()) {
 						newer = true;
-					} else if (desc.version) {
+					} else if (!desc.version.empty()) {
 						auto ver = semver::version::parse(desc.version);
 						auto existingVer = semver::version::parse(existingDesc.version);
 						newer = ver > existingVer;
@@ -254,8 +256,6 @@ CLAP_EXPORT void clap_deinit() {
 
 	wclapDirs.clear();
 	invalidations.clear();
-	storedStrings.clear();
-	storedFeatures.clear();
 	wclapList.clear();
 	pluginList.clear();
 
@@ -269,13 +269,13 @@ static const clap_plugin_descriptor_t * pluginFactory_get_plugin_descriptor(cons
 	if (index >= pluginList.size()) return nullptr;
 	auto &plugin = pluginList[index];
 	auto &desc = wclapList[plugin.wclapIndex].plugins[plugin.pluginIndex];
-	return &desc;
+	return &desc.clapDesc;
 }
 static const clap_plugin_t * pluginFactory_create_plugin(const struct clap_plugin_factory *factory, const clap_host *host, const char *pluginId) {
 	for (auto &plugin : pluginList) {
 		auto &wclap = wclapList[plugin.wclapIndex];
 		auto &desc = wclap.plugins[plugin.pluginIndex];
-		if (!std::strcmp(pluginId, desc.id)) {
+		if (desc.id == pluginId) {
 			auto *pluginFactory = wclap.getPluginFactory();
 			if (!pluginFactory) return nullptr;
 			return pluginFactory->create_plugin(pluginFactory, host, pluginId);
