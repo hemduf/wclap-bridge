@@ -1183,7 +1183,6 @@ private:
 			stream.seekg(0);
 			// Read entire file into memory at once
 			if (stream.read(buffer.data(), buffer.size())) {
-				std::cout << "WCLAP: read " << buffer.size() << " bytes for file: " << *mapped << std::endl;
 				size_t index = 0;
 				while (index < buffer.size()) {
 					auto result = ostream->write(ostream, (const void *)(buffer.data() + index), uint64_t(buffer.size() - index));
