@@ -3,7 +3,7 @@
 #include "clap/all.h"
 
 #include "semver/semver.hpp"
-#include "cbor-walker/cbor-walker.h"
+//#include "cbor-walker/cbor-walker.h"
 
 #include <iostream>
 #include <atomic>
