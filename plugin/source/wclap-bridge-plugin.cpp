@@ -87,11 +87,13 @@ struct Wclap {
 };
 static std::vector<std::string> wclapDirs;
 static std::vector<Wclap> wclapList;
-std::string lowerCaseAscii(std::string str) {
-	for (auto &c : str) {
+bool endsWith(const std::string &str, const std::string &end) {
+	if (str.size() < end.size()) return false;
+	auto strEnd = str.substr(str.size() - end.size());
+	for (auto &c : strEnd) {
 		if (c >= 'A' && c <= 'Z') c -= ('a' - 'A');
 	}
-	return str;
+	return strEnd == end;
 }
 void scanWclapDirectory(const std::string &pathStr) {
 	wclapDirs.push_back(pathStr);
@@ -99,9 +101,7 @@ void scanWclapDirectory(const std::string &pathStr) {
 	if (!std::filesystem::exists(pathStr)) return;
 	for (auto &entry : std::filesystem::recursive_directory_iterator(pathStr)) {
 		auto wclapPath = entry.path().string();
-		auto wclapEnd = lowerCaseAscii(wclapPath.substr(wclapPath.size() - 6));
-		auto wclapEnd2 = lowerCaseAscii(wclapPath.substr(wclapPath.size() - 11));
-		if (wclapEnd == ".wclap" || wclapEnd2 == ".wclap.wasm") {
+		if (endsWith(wclapPath, ".wclap") || endsWith(wclapPath, ".wclap.wasm")) {
 			auto *handle = wclap_open(wclapPath.c_str());
 			if (!handle) continue;
 			char errorMessage[256] = "";

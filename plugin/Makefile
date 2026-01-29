@@ -13,6 +13,8 @@ clean:
 
 # Development
 
+CURRENT_DIR := $(shell pwd)
+
 dev: dev-wclap-bridge-plugin
 
 out/%.RPP:
@@ -24,7 +26,7 @@ dev-%: %
 	$(MAKE) out/REAPER/$*.RPP
 	pushd ~/Library/Audio/Plug-Ins/CLAP \
 		&& rm -f "$*.clap" \
-		&& ln -s "$(CURRENT_DIR)/out/Release/$*.clap"
+		&& ln -s "$(CURRENT_DIR)/out/$*.clap"
 	/Applications/REAPER.app/Contents/MacOS/REAPER out/REAPER/$*.RPP
 
 nodemon:
