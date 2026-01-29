@@ -87,15 +87,23 @@ struct Wclap {
 };
 static std::vector<std::string> wclapDirs;
 static std::vector<Wclap> wclapList;
+std::string lowerCaseAscii(std::string str) {
+	for (auto &c : str) {
+		if (c >= 'A' && c <= 'Z') c -= ('a' - 'A');
+	}
+	return str;
+}
 void scanWclapDirectory(const std::string &pathStr) {
 	wclapDirs.push_back(pathStr);
 	
 	if (!std::filesystem::exists(pathStr)) return;
 	for (auto &entry : std::filesystem::recursive_directory_iterator(pathStr)) {
 		auto wclapPath = entry.path().string();
-		auto wclapEnd = wclapPath.substr(wclapPath.size() - 6);
-		if (wclapEnd == ".wclap") {
+		auto wclapEnd = lowerCaseAscii(wclapPath.substr(wclapPath.size() - 6));
+		auto wclapEnd2 = lowerCaseAscii(wclapPath.substr(wclapPath.size() - 11));
+		if (wclapEnd == ".wclap" || wclapEnd2 == ".wclap.wasm") {
 			auto *handle = wclap_open(wclapPath.c_str());
+			if (!handle) continue;
 			char errorMessage[256] = "";
 			if (wclap_get_error(handle, errorMessage, 256)) {
 				std::cerr << "WCLAP bridge plugin: couldn't open WCLAP at: " << wclapPath << "\n";

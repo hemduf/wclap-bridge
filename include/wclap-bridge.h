@@ -11,7 +11,7 @@ extern "C" {
 bool wclap_global_init(unsigned int timeLimitMs);
 void wclap_global_deinit();
 
-// Opens a WCLAP, returning an opaque identifier (or null on failure)
+// Opens a WCLAP, returning an opaque identifier (or null if there was an IO failure).  Even if it returns a non-null handle, you should immediately check `wclap_get_error()`
 void * wclap_open(const char *wclapDir);
 
 // Opens a WCLAP with read-only directory `/plugin/` and optional read-write directories `/presets/`, `/cache/` and `/var/`
