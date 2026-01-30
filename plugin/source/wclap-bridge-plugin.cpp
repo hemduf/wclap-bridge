@@ -3,7 +3,6 @@
 #include "clap/all.h"
 
 #include "semver/semver.hpp"
-//#include "cbor-walker/cbor-walker.h"
 
 #include <iostream>
 #include <atomic>
@@ -90,8 +89,8 @@ struct PluginDescriptor {
 	std::string id, name, vendor, url, manual_url, support_url, version, description;
 	std::vector<std::string> features;
 
-	PluginDescriptor(const clap_plugin_descriptor *desc) {
-		clapDesc = *desc;
+	PluginDescriptor(const clap_plugin_descriptor *rawDesc) {
+		clapDesc = *rawDesc;
 
 		setString(id, clapDesc.id);
 		setString(name, clapDesc.name);
@@ -102,7 +101,7 @@ struct PluginDescriptor {
 		setString(version, clapDesc.version);
 		setString(description, clapDesc.description);
 		
-		const char * const *rawFeatures = clapDesc.features;
+		const char * const *rawFeatures = rawDesc->features;
 		while (rawFeatures && *rawFeatures) {
 			features.push_back(*rawFeatures);
 			++rawFeatures;
@@ -111,6 +110,7 @@ struct PluginDescriptor {
 		clapFeatures.push_back(nullptr);
 		clapDesc.features = clapFeatures.data();
 	}
+	PluginDescriptor(const PluginDescriptor &other) : PluginDescriptor(&other.clapDesc) {}
 	
 private:
 	void setString(std::string &field, const char *&clapField) {

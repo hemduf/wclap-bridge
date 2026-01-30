@@ -31,7 +31,6 @@ struct PluginFactory {
 	}
 
 	clap_plugin *createPlugin(const clap_host *host, const char *pluginId) const {
-LOG_EXPR(pluginId);
 		const clap_plugin_descriptor *desc = nullptr;
 		for (auto &d : descriptors) {
 			if (!std::strcmp(d.id, pluginId)) {
